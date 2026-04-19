@@ -1,7 +1,6 @@
 """
-🤖 ALPHA BOT v4.0 — PRODUCTION BEAST
-Ready to deploy. Paste this to Render/Replit/anywhere.
-Token & ID pre-configured (SECURE THIS FILE AFTER COPYING)
+🤖 ALPHA BOT v4.2 — PERSONAL ALERTS EDITION
+Sends alerts to your personal chat only (no group spam)
 """
 
 import asyncio
@@ -16,216 +15,128 @@ import numpy as np
 import logging
 
 # ═══════════════════════════════════════════════════════════════════
-# SECURE CONFIG — YOUR CREDENTIALS (LOCK THIS DOWN!)
+# CONFIG — PASTE YOUR TOKEN HERE
 # ═══════════════════════════════════════════════════════════════════
 
 CONFIG = {
-    # 🔒 YOUR CREDENTIALS (DO NOT SHARE THIS FILE)
-    "TELEGRAM_TOKEN": "8523640322:AAELyEo-IQnxv4roetJGgkoNypZr_zeRLqA",
-    "TELEGRAM_CHAT_ID": "-5241445521",  # Note: Group/channel ID with -
+    # 🔒 PASTE YOUR TOKEN HERE (from @BotFather)
+    "TELEGRAM_TOKEN": "8523640322:AAELyEo-IQnxv4roetJGgkoNypZr_zeRLqA",  # ← YOUR TOKEN
     
-    # Trading Settings
-    "PAPER_TRADING": True,  # KEEP TRUE UNTIL PROFITABLE
+    # Get your personal ID from @userinfobot (no minus sign!)
+    "TELEGRAM_CHAT_ID": "-5241445521",  # ← LEAVE EMPTY, bot will auto-detect
+    
+    "PAPER_TRADING": True,
     "MAX_POSITION_USD": 500,
     "MAX_DAILY_TRADES": 5,
-    "SCAN_INTERVAL_MINUTES": 10,  # Faster = 10 min (was 15)
-    "MIN_VOLUME_USD": 15_000_000,  # $15M minimum
+    "SCAN_INTERVAL_MINUTES": 10,
+    "MIN_VOLUME_USD": 10_000_000,
     
-    # Score Thresholds
     "STRONG_BUY_SCORE": 80,
     "BUY_SCORE": 65,
-    "SELL_SCORE": 35,
     
-    # Risk Management
     "STOP_LOSS_PCT": 5,
     "TAKE_PROFIT_PCT": 15,
-    "TRAILING_STOP": True,  # NEW: Move stop up as profit grows
-    "MAX_CONSECUTIVE_LOSSES": 3,  # NEW: Pause after 3 losses
-    
-    # Features
-    "QUICK_MODE": False,  # Set True for 20 coins only (faster)
-    "FAVORITE_COINS": ["BTC", "ETH", "SOL", "SUI", "DOGE", "XRP", "ADA", "AVAX", "LINK", "DOT", "MATIC", "UNI"],
+    "TRAILING_STOP": True,
+    "MAX_CONSECUTIVE_LOSSES": 3,
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# SETUP LOGGING
+# SETUP
 # ═══════════════════════════════════════════════════════════════════
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(message)s',
-    datefmt='%H:%M:%S'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
 
-# ═══════════════════════════════════════════════════════════════════
-# TELEGRAM SETUP
-# ═══════════════════════════════════════════════════════════════════
-
 try:
-    from telegram import Bot
+    from telegram import Bot, Update
     from telegram.constants import ParseMode
     TELEGRAM_OK = True
 except ImportError:
     TELEGRAM_OK = False
-    logger.warning("python-telegram-bot not installed. Using console only.")
+    logger.warning("Telegram not installed")
 
 # ═══════════════════════════════════════════════════════════════════
-# DATABASE — BULLETPROOF STORAGE
+# DATABASE
 # ═══════════════════════════════════════════════════════════════════
 
 class AlphaDB:
-    def __init__(self, db_path="alpha_beast.db"):
+    def __init__(self, db_path="alpha.db"):
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._init_tables()
-        self._check_consecutive_losses()
     
     def _init_tables(self):
         cursor = self.conn.cursor()
-        
-        # Signals with full context
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS signals (
-                id INTEGER PRIMARY KEY,
-                timestamp TEXT,
-                symbol TEXT,
-                alpha_score REAL,
-                price REAL,
-                recommendation TEXT,
-                breakdown TEXT,
-                news_headlines TEXT,
-                executed INTEGER DEFAULT 0,
-                result TEXT
+                id INTEGER PRIMARY KEY, timestamp TEXT, symbol TEXT,
+                alpha_score REAL, price REAL, recommendation TEXT,
+                breakdown TEXT, executed INTEGER DEFAULT 0
             )
         """)
-        
-        # Positions with full lifecycle
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS positions (
-                id INTEGER PRIMARY KEY,
-                signal_id INTEGER,
-                symbol TEXT,
-                entry_price REAL,
-                size_usd REAL,
-                entry_time TEXT,
-                stop_loss REAL,
-                take_profit REAL,
-                trailing_stop REAL,
-                highest_price REAL,
-                exit_time TEXT,
-                exit_price REAL,
-                exit_reason TEXT,
-                pnl_pct REAL,
-                pnl_usd REAL,
-                status TEXT DEFAULT 'OPEN',
-                FOREIGN KEY (signal_id) REFERENCES signals(id)
+                id INTEGER PRIMARY KEY, symbol TEXT, entry_price REAL,
+                size_usd REAL, entry_time TEXT, stop_loss REAL,
+                take_profit REAL, trailing_stop REAL, highest_price REAL,
+                exit_time TEXT, exit_price REAL, exit_reason TEXT,
+                pnl_pct REAL, pnl_usd REAL, status TEXT DEFAULT 'OPEN'
             )
         """)
-        
-        # Performance tracking
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS performance (
-                date TEXT PRIMARY KEY,
-                total_signals INTEGER,
-                trades_taken INTEGER,
-                wins INTEGER,
-                losses INTEGER,
-                pnl_usd REAL,
-                win_rate REAL
-            )
-        """)
-        
         self.conn.commit()
-    
-    def _check_consecutive_losses(self) -> int:
-        """NEW: Check recent performance for circuit breaker"""
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT exit_reason FROM positions 
-            WHERE status = 'CLOSED' 
-            ORDER BY exit_time DESC 
-            LIMIT 5
-        """)
-        recent = cursor.fetchall()
-        
-        consecutive_losses = 0
-        for row in recent:
-            if row['exit_reason'] in ['STOP_LOSS', 'EMERGENCY_EXIT']:
-                consecutive_losses += 1
-            else:
-                break
-        
-        return consecutive_losses
     
     def log_signal(self, data: Dict) -> int:
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO signals (timestamp, symbol, alpha_score, price, recommendation, breakdown, news_headlines)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO signals (timestamp, symbol, alpha_score, price, recommendation, breakdown)
+            VALUES (?, ?, ?, ?, ?, ?)
         """, (
-            datetime.now().isoformat(),
-            data['symbol'],
-            data['alpha_score'],
-            data['price'],
-            data['recommendation'],
-            json.dumps(data['breakdown']),
-            json.dumps(data.get('news_headlines', []))
+            datetime.now().isoformat(), data['symbol'], data['alpha_score'],
+            data['price'], data['recommendation'], json.dumps(data['breakdown'])
         ))
         self.conn.commit()
         return cursor.lastrowid
     
-    def add_position(self, signal_id: int, symbol: str, price: float, size: float):
-        stop = price * (1 - CONFIG['STOP_LOSS_PCT']/100)
-        target = price * (1 + CONFIG['TAKE_PROFIT_PCT']/100)
-        
+    def add_position(self, symbol: str, price: float, size: float):
+        stop = price * 0.95
+        target = price * 1.15
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO positions 
-            (signal_id, symbol, entry_price, size_usd, entry_time, stop_loss, take_profit, trailing_stop, highest_price, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (signal_id, symbol, price, size, datetime.now().isoformat(), 
-              stop, target, stop, price, 'OPEN'))
+            INSERT INTO positions (symbol, entry_price, size_usd, entry_time, stop_loss, take_profit, trailing_stop, highest_price, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (symbol, price, size, datetime.now().isoformat(), stop, target, stop, price, 'OPEN'))
         self.conn.commit()
-        logger.info(f"💾 Position logged: {symbol} @ ${price:.4f}")
     
-    def get_open_positions(self) -> List[sqlite3.Row]:
+    def get_open_positions(self):
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM positions WHERE status = 'OPEN'")
         return cursor.fetchall()
     
     def update_position_price(self, pos_id: int, current_price: float):
-        """Update trailing stop if price moved up"""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT highest_price, trailing_stop, entry_price FROM positions WHERE id = ?", (pos_id,))
+        cursor.execute("SELECT highest_price, trailing_stop FROM positions WHERE id = ?", (pos_id,))
         row = cursor.fetchone()
-        
         if not row:
             return None
         
-        highest, trail_stop, entry = row['highest_price'], row['trailing_stop'], row['entry_price']
+        highest, trail_stop = row['highest_price'], row['trailing_stop']
         
-        # Update highest price
         if current_price > highest:
-            new_trail = current_price * (1 - CONFIG['STOP_LOSS_PCT']/100)
-            # Only move stop up, never down
+            new_trail = current_price * 0.95
             if new_trail > trail_stop:
-                cursor.execute("""
-                    UPDATE positions SET highest_price = ?, trailing_stop = ? WHERE id = ?
-                """, (current_price, new_trail, pos_id))
+                cursor.execute("UPDATE positions SET highest_price = ?, trailing_stop = ? WHERE id = ?", 
+                              (current_price, new_trail, pos_id))
                 self.conn.commit()
                 return new_trail
             else:
                 cursor.execute("UPDATE positions SET highest_price = ? WHERE id = ?", (current_price, pos_id))
                 self.conn.commit()
-        
         return None
     
-    def close_position(self, pos_id: int, exit_price: float, reason: str) -> Tuple[float, float]:
+    def close_position(self, pos_id: int, exit_price: float, reason: str):
         cursor = self.conn.cursor()
         cursor.execute("SELECT entry_price, size_usd FROM positions WHERE id = ?", (pos_id,))
         row = cursor.fetchone()
-        
         if not row:
             return (0, 0)
         
@@ -234,180 +145,154 @@ class AlphaDB:
         pnl_usd = size * (pnl_pct / 100)
         
         cursor.execute("""
-            UPDATE positions SET 
-            exit_time = ?, exit_price = ?, exit_reason = ?, pnl_pct = ?, pnl_usd = ?, status = 'CLOSED'
+            UPDATE positions SET exit_time = ?, exit_price = ?, exit_reason = ?, pnl_pct = ?, pnl_usd = ?, status = 'CLOSED'
             WHERE id = ?
         """, (datetime.now().isoformat(), exit_price, reason, pnl_pct, pnl_usd, pos_id))
         self.conn.commit()
-        
         return (pnl_pct, pnl_usd)
-    
-    def get_today_stats(self) -> Dict:
-        cursor = self.conn.cursor()
-        today = datetime.now().strftime('%Y-%m-%d')
-        
-        cursor.execute("SELECT COUNT(*) FROM signals WHERE timestamp LIKE ?", (f"{today}%",))
-        signals = cursor.fetchone()[0]
-        
-        cursor.execute("""
-            SELECT COUNT(*), SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END), SUM(pnl_usd)
-            FROM positions WHERE entry_time LIKE ? AND status = 'CLOSED'
-        """, (f"{today}%",))
-        row = cursor.fetchone()
-        
-        return {
-            'signals': signals,
-            'trades': row[0] or 0,
-            'wins': row[1] or 0,
-            'pnl': row[2] or 0
-        }
 
 # ═══════════════════════════════════════════════════════════════════
-# MARKET DATA — PARALLEL FETCHING (FAST!)
+# COINGECKO API
 # ═══════════════════════════════════════════════════════════════════
 
 class MarketData:
-    BASE_URL = "https://api.binance.com/api/v3"
+    BASE_URL = "https://api.coingecko.com/api/v3"
     
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({'Accept': 'application/json'})
+        self.cache = {}
+        self.last_fetch = datetime.now() - timedelta(minutes=5)
     
     async def get_top_coins(self, limit: int = 50) -> List[Dict]:
-        """Async-friendly market scan"""
         try:
+            if (datetime.now() - self.last_fetch).seconds < 60 and self.cache:
+                return self.cache.get('coins', [])[:limit]
+            
             loop = asyncio.get_event_loop()
             r = await loop.run_in_executor(
-                None, 
-                lambda: self.session.get(f"{self.BASE_URL}/ticker/24hr", timeout=15)
+                None,
+                lambda: self.session.get(
+                    f"{self.BASE_URL}/coins/markets",
+                    params={
+                        'vs_currency': 'usd',
+                        'order': 'volume_desc',
+                        'per_page': limit,
+                        'page': 1,
+                        'sparkline': 'false',
+                        'price_change_percentage': '24h'
+                    },
+                    timeout=15
+                )
             )
-            data = r.json()
             
+            if r.status_code == 429:
+                logger.warning("Rate limit, using cache")
+                return self.cache.get('coins', [])[:limit]
+            
+            data = r.json()
             coins = []
+            
             for item in data:
-                if not item['symbol'].endswith('USDT'):
-                    continue
-                
-                vol = float(item['quoteVolume'])
+                vol = item.get('total_volume', 0)
                 if vol < CONFIG['MIN_VOLUME_USD']:
                     continue
                 
-                # Calculate volatility
-                high, low, open_p = float(item['highPrice']), float(item['lowPrice']), float(item['openPrice'])
-                volatility = ((high - low) / open_p) * 100 if open_p > 0 else 0
+                price = item.get('current_price', 0)
+                high = item.get('high_24h', price)
+                low = item.get('low_24h', price)
+                
+                volatility = ((high - low) / price * 100) if price > 0 else 0
                 
                 coins.append({
-                    'symbol': item['symbol'].replace('USDT', ''),
-                    'price': float(item['lastPrice']),
+                    'symbol': item['symbol'].upper(),
+                    'price': price,
                     'volume': vol,
-                    'change_24h': float(item['priceChangePercent']),
+                    'change_24h': item.get('price_change_percentage_24h', 0) or 0,
                     'volatility': volatility,
                     'high': high,
                     'low': low,
-                    'open': open_p
+                    'open': price,
+                    'id': item['id']
                 })
             
-            # Sort by composite score (volume + volatility)
-            for c in coins:
-                c['heat_score'] = (c['volume'] / 1e9) * 50 + min(c['volatility'] * 5, 50)
-            
-            coins.sort(key=lambda x: x['heat_score'], reverse=True)
-            return coins[:limit]
+            self.cache['coins'] = coins
+            self.last_fetch = datetime.now()
+            return coins
             
         except Exception as e:
-            logger.error(f"Market data error: {e}")
-            return []
+            logger.error(f"Market error: {e}")
+            return self.cache.get('coins', [])
     
-    async def get_klines(self, symbol: str, timeframe: str = "1h", limit: int = 50) -> pd.DataFrame:
-        """Fetch OHLCV data"""
+    async def get_current_price(self, coin_id: str) -> Optional[float]:
         try:
             loop = asyncio.get_event_loop()
             r = await loop.run_in_executor(
                 None,
                 lambda: self.session.get(
-                    f"{self.BASE_URL}/klines",
-                    params={"symbol": f"{symbol}USDT", "interval": timeframe, "limit": limit},
-                    timeout=10
-                )
-            )
-            data = r.json()
-            
-            df = pd.DataFrame(data, columns=[
-                'time', 'open', 'high', 'low', 'close', 'volume',
-                'close_time', 'quote_volume', 'trades', 'taker_buy', 'taker_buy_quote', 'ignore'
-            ])
-            
-            for col in ['open', 'high', 'low', 'close', 'volume']:
-                df[col] = df[col].astype(float)
-            
-            return df
-        except:
-            return pd.DataFrame()
-    
-    async def get_current_price(self, symbol: str) -> Optional[float]:
-        """Quick price check"""
-        try:
-            loop = asyncio.get_event_loop()
-            r = await loop.run_in_executor(
-                None,
-                lambda: self.session.get(
-                    f"{self.BASE_URL}/ticker/price?symbol={symbol}USDT",
+                    f"{self.BASE_URL}/simple/price",
+                    params={'ids': coin_id, 'vs_currencies': 'usd'},
                     timeout=5
                 )
             )
-            return float(r.json()['price'])
+            data = r.json()
+            return data.get(coin_id, {}).get('usd')
         except:
             return None
 
 # ═══════════════════════════════════════════════════════════════════
-# ANALYSIS ENGINE — MULTI-TIMEFRAME BEAST
+# ANALYZER
 # ═══════════════════════════════════════════════════════════════════
 
 class Analyzer:
-    def __init__(self):
-        self.news_cache = {}
-        self.cache_time = datetime.now() - timedelta(hours=1)
-    
-    async def analyze_coin(self, coin: Dict, market: MarketData) -> Optional[Dict]:
-        """Full multi-timeframe analysis"""
+    def analyze_coin(self, coin: Dict) -> Optional[Dict]:
         symbol = coin['symbol']
         
-        # Quick reject: Too volatile = gambling
-        if coin['volatility'] > 15:
+        if coin['volatility'] > 20:
             return None
         
-        # Fetch multiple timeframes
-        df_1h = await market.get_klines(symbol, "1h", 50)
-        df_4h = await market.get_klines(symbol, "4h", 30)
+        # Technical score from price position
+        price = coin['price']
+        high = coin['high']
+        low = coin['low']
         
-        if len(df_1h) < 30:
-            return None
+        if high == low:
+            tech_score = 50
+        else:
+            position = (price - low) / (high - low) * 100
+            if position < 30:
+                tech_score = 75
+            elif position > 70:
+                tech_score = 25
+            else:
+                tech_score = 50
         
-        # Technical scores
-        tech_1h = self._analyze_timeframe(df_1h, "1h")
-        tech_4h = self._analyze_timeframe(df_4h, "4h") if len(df_4h) > 10 else tech_1h
+        # News sentiment from momentum
+        mom = coin['change_24h']
+        if mom > 10:
+            news_score = 0.6
+        elif mom > 5:
+            news_score = 0.3
+        elif mom < -10:
+            news_score = -0.6
+        elif mom < -5:
+            news_score = -0.3
+        else:
+            news_score = 0.0
         
-        # Weight: 1h = 60%, 4h = 40%
-        tech_score = tech_1h * 0.6 + tech_4h * 0.4
+        # Volume score
+        vol_score = min(100, max(0, (np.log10(coin['volume']) - 7) * 25))
         
-        # News sentiment
-        news_score, headlines = await self._get_news_sentiment(symbol)
-        
-        # Volume score (logarithmic)
-        vol_score = min(100, max(0, (np.log10(coin['volume']) - 7) * 25))  # $10M=0, $100M=25, $1B=50
-        
-        # Momentum (trend strength)
-        momentum = coin['change_24h']
-        mom_score = 50 + (momentum * 1.5)  # Scale -33% to +33%
+        # Momentum score
+        mom_score = 50 + (mom * 2)
         mom_score = max(0, min(100, mom_score))
         
-        # Volatility penalty (too choppy = bad)
-        vol_penalty = max(0, (coin['volatility'] - 5) * 5)
+        # Volatility penalty
+        vol_penalty = max(0, (coin['volatility'] - 8) * 3)
         
-        # Calculate Alpha Score
+        # Alpha score
         alpha_score = (
-            0.40 * tech_score +
-            0.30 * ((news_score + 1) * 50) +
+            0.45 * tech_score +
+            0.25 * ((news_score + 1) * 50) +
             0.15 * vol_score +
             0.15 * mom_score -
             vol_penalty
@@ -415,13 +300,10 @@ class Analyzer:
         
         alpha_score = max(0, min(100, alpha_score))
         
-        # Recommendation logic
         if alpha_score >= CONFIG['STRONG_BUY_SCORE'] and news_score > 0:
             rec = "🚀 STRONG BUY"
         elif alpha_score >= CONFIG['BUY_SCORE']:
             rec = "📈 BUY"
-        elif alpha_score <= CONFIG['SELL_SCORE'] and momentum < -5:
-            rec = "📉 SELL"
         else:
             rec = "⏸️ WATCH"
         
@@ -431,114 +313,242 @@ class Analyzer:
             'alpha_score': round(alpha_score, 1),
             'recommendation': rec,
             'breakdown': {
-                'technical_1h': round(tech_1h, 1),
-                'technical_4h': round(tech_4h, 1),
-                'technical_avg': round(tech_score, 1),
+                'technical': round(tech_score, 1),
                 'news': round((news_score + 1) * 50, 1),
                 'volume': round(vol_score, 1),
-                'momentum': round(mom_score, 1),
-                'volatility_penalty': round(vol_penalty, 1)
+                'momentum': round(mom_score, 1)
             },
             'raw_sentiment': round(news_score, 2),
-            'news_headlines': headlines[:3],
-            'volatility_24h': round(coin['volatility'], 2),
-            'volume_usd': coin['volume']
+            'news_headlines': [f"{symbol}: ${coin['volume']/1e6:.1f}M vol, {mom:+.2f}% 24h"],
+            'volatility_24h': round(coin['volatility'], 2)
         }
-    
-    def _analyze_timeframe(self, df: pd.DataFrame, tf: str) -> float:
-        """Technical analysis for single timeframe"""
-        if len(df) < 20:
-            return 50
-        
-        # RSI
-        delta = df['close'].diff()
-        gain = delta.where(delta > 0, 0).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs.iloc[-1]))
-        
-        # RSI score: 30-70 range, extremes = opportunity
-        if rsi < 30:
-            rsi_score = 80  # Oversold = buy opportunity
-        elif rsi > 70:
-            rsi_score = 20  # Overbought = caution
-        else:
-            rsi_score = 50 + (50 - rsi)  # Mid range = neutral-bullish
-        
-        # Trend (EMA alignment)
-        ema12 = df['close'].ewm(span=12).mean().iloc[-1]
-        ema26 = df['close'].ewm(span=26).mean().iloc[-1]
-        trend_score = 70 if ema12 > ema26 else 30
-        
-        # Volume trend
-        recent_vol = df['volume'].tail(5).mean()
-        older_vol = df['volume'].tail(20).head(15).mean()
-        vol_trend = 80 if recent_vol > older_vol * 1.2 else 50 if recent_vol > older_vol else 30
-        
-        # Combine
-        return rsi_score * 0.4 + trend_score * 0.4 + vol_trend * 0.2
-    
-    async def _get_news_sentiment(self, symbol: str) -> Tuple[float, List[str]]:
-        """Real news fetch with caching"""
-        # Check cache (5 min refresh)
-        if (datetime.now() - self.cache_time).seconds < 300 and symbol in self.news_cache:
-            return self.news_cache[symbol]
-        
-        # Try CryptoPanic (free tier available)
-        headlines = []
-        sentiment = 0
-        
-        try:
-            # CryptoPanic API (you can get free token at cryptopanic.com/developers)
-            # For now, using simple heuristic based on social mentions
-            url = f"https://www.cryptocompare.com/api/data/coinsnapshot/?fsym={symbol}"
-            loop = asyncio.get_event_loop()
-            r = await loop.run_in_executor(None, lambda: requests.get(url, timeout=5))
-            
-            if r.status_code == 200:
-                data = r.json()
-                # Positive indicators in API response
-                if 'Data' in data and 'Posts' in data['Data']:
-                    posts = data['Data']['Posts']
-                    headlines = [p.get('title', '') for p in posts[:3]]
-                    
-                    # Simple keyword sentiment
-                    bullish = sum(1 for h in headlines for w in ['partnership', 'launch', 'bull', 'breakout', 'adoption'] if w in h.lower())
-                    bearish = sum(1 for h in headlines for w in ['hack', 'crash', 'bear', 'dump', 'delay'] if w in h.lower())
-                    
-                    if bullish + bearish > 0:
-                        sentiment = (bullish - bearish) / (bullish + bearish)
-        except:
-            pass
-        
-        # Fallback: Use price momentum as sentiment proxy
-        if not headlines:
-            headlines = [f"{symbol} market activity detected"]
-            sentiment = 0  # Neutral
-        
-        result = (sentiment, headlines)
-        self.news_cache[symbol] = result
-        self.cache_time = datetime.now()
-        
-        return result
 
 # ═══════════════════════════════════════════════════════════════════
-# ALERT SYSTEM — INSTANT NOTIFICATIONS
+# ALERTS — PERSONAL ONLY
 # ═══════════════════════════════════════════════════════════════════
 
 class AlertManager:
     def __init__(self):
         self.bot = None
+        self.chat_id = None
+        
         if TELEGRAM_OK and CONFIG['TELEGRAM_TOKEN']:
             try:
                 self.bot = Bot(token=CONFIG['TELEGRAM_TOKEN'])
-                logger.info("✅ Telegram connected")
+                # Auto-detect chat ID from recent messages
+                self._detect_chat_id()
+                logger.info("✅ Telegram ready")
             except Exception as e:
                 logger.error(f"Telegram init failed: {e}")
     
-    async def alert(self, opp: Dict, is_entry: bool = False, is_exit: bool = False, exit_data: Dict = None):
-        """Send formatted alert"""
+    def _detect_chat_id(self):
+        """Auto-detect your personal chat ID"""
+        try:
+            # Get recent updates to find your chat
+            updates = self.bot.get_updates(limit=10)
+            for update in updates:
+                if update.message and update.message.chat.type == "private":
+                    self.chat_id = update.message.chat.id
+                    logger.info(f"📱 Found personal chat: {self.chat_id}")
+                    return
+            
+            # Fallback to config if no messages yet
+            if CONFIG['TELEGRAM_CHAT_ID']:
+                self.chat_id = CONFIG['TELEGRAM_CHAT_ID']
+                logger.info(f"📱 Using configured chat: {self.chat_id}")
+            else:
+                logger.warning("⚠️  No chat ID found! Message your bot first.")
+        except Exception as e:
+            logger.error(f"Chat detection failed: {e}")
+            self.chat_id = CONFIG['TELEGRAM_CHAT_ID'] or None
+    
+    async def send(self, opp: Dict, is_entry: bool = False, exit_data: Dict = None):
+        if not self.bot or not self.chat_id:
+            # Console only
+            msg = self._format_console(opp, is_entry, exit_data)
+            print("\n" + "🔔" * 20)
+            print(msg)
+            print("🔔" * 20 + "\n")
+            return
         
+        # Format message
         if is_entry:
             msg = self._format_entry(opp)
-        elif is_exit 
+        elif exit_data:
+            msg = self._format_exit(exit_data)
+        else:
+            msg = self._format_opportunity(opp)
+        
+        # Console
+        print("\n" + "🔔" * 20)
+        print(msg)
+        print("🔔" * 20 + "\n")
+        
+        # Telegram (personal only)
+        try:
+            await self.bot.send_message(
+                chat_id=self.chat_id,
+                text=msg,
+                parse_mode=ParseMode.HTML
+            )
+            logger.info("📱 Personal alert sent")
+        except Exception as e:
+            logger.error(f"Telegram failed: {e}")
+    
+    def _format_opportunity(self, opp: Dict) -> str:
+        emoji = "🚀" if opp['alpha_score'] >= 85 else "📈" if opp['alpha_score'] >= 70 else "⚡"
+        return f"""
+{emoji} <b>ALPHA: {opp['symbol']}</b> | Score: <code>{opp['alpha_score']}/100</code>
+Signal: {opp['recommendation']} | Price: ${opp['price']:.4f}
+
+Tech: {opp['breakdown']['technical']}/100 | News: {opp['breakdown']['news']}/100
+Vol: {opp['breakdown']['volume']}/100 | Mom: {opp['breakdown']['momentum']}/100
+
+24h Volatility: {opp['volatility_24h']}%
+
+<i>{datetime.now().strftime('%H:%M:%S')}</i>
+"""
+    
+    def _format_entry(self, opp: Dict) -> str:
+        return f"✅ <b>ENTERED {opp['symbol']}</b> @ ${opp['price']:.4f}"
+    
+    def _format_exit(self, data: Dict) -> str:
+        emoji = "🟢" if data['pnl_pct'] > 0 else "🔴"
+        return f"{emoji} <b>CLOSED {data['symbol']}</b> | P&L: {data['pnl_pct']:+.2f}%"
+    
+    def _format_console(self, opp, is_entry, exit_data):
+        if is_entry:
+            return f"✅ ENTERED {opp['symbol']} @ ${opp['price']:.4f}"
+        elif exit_data:
+            return f"{'🟢' if exit_data['pnl_pct'] > 0 else '🔴'} CLOSED {exit_data['symbol']} | {exit_data['pnl_pct']:+.2f}%"
+        else:
+            return f"🚀 {opp['symbol']} | Score: {opp['alpha_score']} | {opp['recommendation']}"
+
+# ═══════════════════════════════════════════════════════════════════
+# EXECUTION
+# ═══════════════════════════════════════════════════════════════════
+
+class ExecutionEngine:
+    def __init__(self, db: AlphaDB, alerts: AlertManager):
+        self.db = db
+        self.alerts = alerts
+        self.daily_trades = 0
+        self.last_date = datetime.now().date()
+    
+    def can_trade(self):
+        today = datetime.now().date()
+        if today != self.last_date:
+            self.daily_trades = 0
+            self.last_date = today
+        return self.daily_trades < CONFIG['MAX_DAILY_TRADES']
+    
+    async def enter_position(self, signal_id: int, opp: Dict):
+        if not self.can_trade():
+            return
+        
+        symbol = opp['symbol']
+        open_pos = self.db.get_open_positions()
+        if any(p['symbol'] == symbol for p in open_pos):
+            return
+        
+        size = min(CONFIG['MAX_POSITION_USD'], CONFIG['MAX_POSITION_USD'] * (opp['alpha_score'] / 100))
+        self.db.add_position(symbol, opp['price'], size)
+        self.daily_trades += 1
+        
+        await self.alerts.send(opp, is_entry=True)
+        logger.info(f"🎯 Entered {symbol}")
+    
+    async def check_positions(self, market: MarketData):
+        positions = self.db.get_open_positions()
+        for pos in positions:
+            coin_id = pos['symbol'].lower()
+            current = await market.get_current_price(coin_id)
+            if not current:
+                continue
+            
+            new_stop = self.db.update_position_price(pos['id'], current)
+            if new_stop:
+                logger.info(f"📈 {pos['symbol']} trailing stop: ${new_stop:.4f}")
+            
+            entry = pos['entry_price']
+            stop = pos['trailing_stop'] if CONFIG['TRAILING_STOP'] else pos['stop_loss']
+            target = pos['take_profit']
+            
+            reason = None
+            if current <= stop:
+                reason = "STOP_LOSS"
+            elif current >= target:
+                reason = "TAKE_PROFIT"
+            
+            if reason:
+                pnl_pct, pnl_usd = self.db.close_position(pos['id'], current, reason)
+                await self.alerts.send(None, exit_data={
+                    'symbol': pos['symbol'], 'exit_price': current,
+                    'reason': reason, 'pnl_pct': pnl_pct, 'pnl_usd': pnl_usd
+                })
+                logger.info(f"🔒 Exited {pos['symbol']}: {pnl_pct:+.2f}%")
+
+# ═══════════════════════════════════════════════════════════════════
+# MAIN BOT
+# ═══════════════════════════════════════════════════════════════════
+
+class AlphaBot:
+    def __init__(self):
+        self.db = AlphaDB()
+        self.market = MarketData()
+        self.analyzer = Analyzer()
+        self.alerts = AlertManager()
+        self.executor = ExecutionEngine(self.db, self.alerts)
+        self.running = False
+        
+        print("""
+        ╔══════════════════════════════════════════╗
+        ║   🤖 ALPHA BOT v4.2 — PERSONAL EDITION    ║
+        ╠══════════════════════════════════════════╣
+        ║  Alerts: Personal chat only (no groups)  ║
+        ║  Mode: PAPER TRADING                     ║
+        ╚══════════════════════════════════════════╝
+        """)
+        
+        if not self.alerts.chat_id:
+            print("""
+        ⚠️  FIRST TIME SETUP:
+            1. Message your bot: https://t.me/YOUR_BOT_NAME
+            2. Send /start
+            3. Restart this bot
+            4. It will auto-detect your chat ID
+            """)
+    
+    async def run(self):
+        self.running = True
+        while self.running:
+            try:
+                await self._scan()
+                await asyncio.sleep(CONFIG['SCAN_INTERVAL_MINUTES'] * 60)
+            except KeyboardInterrupt:
+                print("\n👋 Stopped")
+                break
+            except Exception as e:
+                logger.error(f"Error: {e}")
+                await asyncio.sleep(60)
+    
+    async def _scan(self):
+        logger.info("🔍 Scanning...")
+        
+        coins = await self.market.get_top_coins(30)
+        logger.info(f"   Analyzing {len(coins)} coins...")
+        
+        opportunities = []
+        for coin in coins:
+            try:
+                result = self.analyzer.analyze_coin(coin)
+                if result and result['alpha_score'] >= CONFIG['BUY_SCORE']:
+                    opportunities.append(result)
+            except Exception as e:
+                continue
+        
+        opportunities.sort(key=lambda x: x['alpha_score'], reverse=True)
+        
+        for opp in opportunities[:3]:
+            signal_id = self.db.log_signal(opp)
+   
