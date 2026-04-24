@@ -48,7 +48,7 @@ init_db()
 # Send SMS function
 def send_sms(number, message):
     try:
-        subprocess.run(['termux-sms-send', '-n', number, message], timeout=15)
+        subprocess.run(['termux-sms-send', '-n', number, message], timeout=18)
         return True, "Sent"
     except Exception as e:
         return False, str(e)
