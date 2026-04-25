@@ -137,14 +137,14 @@ def scheduler_worker():
 scheduler_thread = threading.Thread(target=scheduler_worker, daemon=True)
 scheduler_thread.start()
 
-# HTML Dashboard - FIXED VERSION
+# HTML Dashboard - COMPLETE WITH BULK SCHEDULE
 DASHBOARD_HTML = '''
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SMS Final Pro - 100% Working</title>
+    <title>SMS Final Pro - Complete</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -173,7 +173,7 @@ DASHBOARD_HTML = '''
                 <div class="row">
                     <div class="col-md-6">
                         <h2><i class="fas fa-sms"></i> SMS Final Pro</h2>
-                        <p class="text-muted">100% Working - With Retry & Schedule</p>
+                        <p class="text-muted">Complete SMS Gateway - With Bulk Schedule</p>
                     </div>
                     <div class="col-md-6 text-end">
                         <button class="btn btn-danger" onclick="logout()"><i class="fas fa-sign-out-alt"></i> Logout</button>
@@ -229,7 +229,7 @@ DASHBOARD_HTML = '''
                 </div>
             </div>
             
-            <!-- Bulk SMS Tab - FIXED -->
+            <!-- Bulk SMS Tab -->
             <div class="tab-pane fade" id="bulk">
                 <div class="card">
                     <div class="card-header"><i class="fas fa-layer-group"></i> Bulk SMS (8 sec delay between each)</div>
@@ -261,29 +261,56 @@ DASHBOARD_HTML = '''
                 </div>
             </div>
             
-            <!-- Schedule Tab - NEW -->
+            <!-- Schedule Tab - WITH BULK SUPPORT -->
             <div class="tab-pane fade" id="schedule">
                 <div class="card">
-                    <div class="card-header"><i class="fas fa-calendar-alt"></i> Schedule SMS</div>
+                    <div class="card-header"><i class="fas fa-calendar-alt"></i> Schedule SMS (Single or Bulk)</div>
                     <div class="card-body">
-                        <div class="row">
-                            <div class="col-md-6">
-                                <label>Phone Number</label>
-                                <input type="text" id="scheduleNumber" class="form-control" placeholder="+216XXXXXXXX">
+                        <ul class="nav nav-tabs" id="scheduleTabs">
+                            <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#singleSchedule">Single SMS</a></li>
+                            <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#bulkSchedule">Bulk SMS</a></li>
+                        </ul>
+                        
+                        <div class="tab-content mt-3">
+                            <!-- Single Schedule -->
+                            <div class="tab-pane active" id="singleSchedule">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <label>Phone Number</label>
+                                        <input type="text" id="scheduleNumber" class="form-control" placeholder="+216XXXXXXXX">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label>Schedule Date & Time</label>
+                                        <input type="datetime-local" id="scheduleDateTime" class="form-control">
+                                    </div>
+                                </div>
+                                <label class="mt-3">Message</label>
+                                <textarea id="scheduleMessage" rows="3" class="form-control" placeholder="Message to send later"></textarea>
+                                <button class="btn btn-gradient mt-3" onclick="scheduleSMS()"><i class="fas fa-calendar-plus"></i> Schedule Single SMS</button>
                             </div>
-                            <div class="col-md-6">
-                                <label>Schedule Date & Time</label>
-                                <input type="datetime-local" id="scheduleDateTime" class="form-control">
+                            
+                            <!-- Bulk Schedule -->
+                            <div class="tab-pane" id="bulkSchedule">
+                                <div class="alert alert-info">
+                                    <i class="fas fa-info-circle"></i> Schedule bulk SMS to multiple numbers at once (8 seconds delay between each)
+                                </div>
+                                
+                                <label>Phone Numbers (one per line)</label>
+                                <textarea id="bulkScheduleNumbers" rows="6" class="form-control" placeholder="+216XXXXXXXXX&#10;+216YYYYYYYYY&#10;+216ZZZZZZZZZ"></textarea>
+                                <small id="bulkScheduleCount" class="text-muted">0 numbers</small>
+                                
+                                <label class="mt-3">Message</label>
+                                <textarea id="bulkScheduleMessage" rows="3" class="form-control" placeholder="Message to send to all numbers"></textarea>
+                                
+                                <label class="mt-3">Schedule Date & Time</label>
+                                <input type="datetime-local" id="bulkScheduleDateTime" class="form-control">
+                                
+                                <button class="btn btn-gradient mt-3" onclick="scheduleBulkSMS()"><i class="fas fa-calendar-plus"></i> Schedule Bulk SMS</button>
                             </div>
                         </div>
                         
-                        <label class="mt-3">Message</label>
-                        <textarea id="scheduleMessage" rows="4" class="form-control" placeholder="Message to send later"></textarea>
-                        
-                        <button class="btn btn-gradient mt-3" onclick="scheduleSMS()"><i class="fas fa-calendar-plus"></i> Schedule SMS</button>
-                        
-                        <hr>
-                        <h5>Scheduled Messages</h5>
+                        <hr class="mt-4">
+                        <h5><i class="fas fa-clock"></i> Pending Scheduled Messages</h5>
                         <div id="scheduledList" class="mt-3"></div>
                     </div>
                 </div>
@@ -354,12 +381,18 @@ DASHBOARD_HTML = '''
         let bulkActive = false;
         let currentNumbers = [];
         
-        // Update number count
+        // Update number counts
         document.getElementById('bulkNumbers').addEventListener('input', function() {
             let lines = this.value.split('\\n');
             let numbers = lines.filter(l => l.trim().match(/^\\+?[0-9]/));
             document.getElementById('numberCount').innerText = numbers.length + ' numbers';
             currentNumbers = numbers;
+        });
+        
+        document.getElementById('bulkScheduleNumbers').addEventListener('input', function() {
+            let lines = this.value.split('\\n');
+            let numbers = lines.filter(l => l.trim().match(/^\\+?[0-9]/));
+            document.getElementById('bulkScheduleCount').innerText = numbers.length + ' numbers to schedule';
         });
         
         // Send single SMS
@@ -393,7 +426,7 @@ DASHBOARD_HTML = '''
             }
         }
         
-        // Start bulk send - FIXED
+        // Start bulk send
         async function startBulkSend() {
             let numbers = currentNumbers;
             let message = document.getElementById('bulkMessage').value;
@@ -439,10 +472,8 @@ DASHBOARD_HTML = '''
                     failed++;
                 }
                 
-                // Update status
                 document.getElementById('bulkStatus').innerHTML = `✅ Sent: ${sent} | ❌ Failed: ${failed}`;
                 
-                // Wait 8 seconds between messages
                 if(i < numbers.length - 1 && bulkActive) {
                     for(let s = 8; s > 0 && bulkActive; s--) {
                         document.getElementById('bulkDetails').innerHTML = `⏰ Waiting ${s} seconds before next message... | Sent: ${sent} | Failed: ${failed}`;
@@ -469,7 +500,7 @@ DASHBOARD_HTML = '''
             }
         }
         
-        // Schedule SMS
+        // Schedule single SMS
         async function scheduleSMS() {
             let number = document.getElementById('scheduleNumber').value;
             let message = document.getElementById('scheduleMessage').value;
@@ -496,6 +527,54 @@ DASHBOARD_HTML = '''
                 loadStats();
             } else {
                 alert('❌ Failed to schedule');
+            }
+        }
+        
+        // Schedule bulk SMS
+        async function scheduleBulkSMS() {
+            let numbersText = document.getElementById('bulkScheduleNumbers').value;
+            let numbers = numbersText.split('\\n').filter(l => l.trim().match(/^\\+?[0-9]/));
+            let message = document.getElementById('bulkScheduleMessage').value;
+            let scheduleTime = document.getElementById('bulkScheduleDateTime').value;
+            
+            if(numbers.length === 0) {
+                alert('Please add phone numbers');
+                return;
+            }
+            if(!message) {
+                alert('Please enter a message');
+                return;
+            }
+            if(!scheduleTime) {
+                alert('Please select schedule date and time');
+                return;
+            }
+            
+            if(!confirm(`Schedule ${numbers.length} messages to be sent at ${scheduleTime}?\\nEach will have 8 second delay between them.`)) {
+                return;
+            }
+            
+            let res = await fetch('/api/schedule-bulk', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    numbers: numbers,
+                    message: message,
+                    scheduleTime: scheduleTime,
+                    key: '{{ api_key }}'
+                })
+            });
+            let data = await res.json();
+            
+            if(data.success) {
+                alert(`✅ ${data.scheduled} SMS messages scheduled successfully!`);
+                document.getElementById('bulkScheduleNumbers').value = '';
+                document.getElementById('bulkScheduleMessage').value = '';
+                document.getElementById('bulkScheduleDateTime').value = '';
+                loadScheduled();
+                loadStats();
+            } else {
+                alert('❌ Failed to schedule: ' + data.message);
             }
         }
         
@@ -613,7 +692,6 @@ DASHBOARD_HTML = '''
         function selectQuickNumber() {
             let select = document.getElementById('quickNumber');
             document.getElementById('singleNumber').value = select.value;
-            document.querySelector('[data-bs-target="#send"]').click();
         }
         
         function showAddContact() { new bootstrap.Modal(document.getElementById('contactModal')).show(); }
@@ -745,23 +823,6 @@ def api_send():
     
     return jsonify({"success": success, "message": result})
 
-@app.route('/api/bulk', methods=['POST'])
-def api_bulk():
-    data = request.json
-    if data.get('key') != API_KEY:
-        return jsonify({"error": "Invalid API key"}), 403
-    
-    numbers = data.get('numbers', [])
-    message = data.get('message')
-    
-    results = []
-    for number in numbers:
-        success, result = send_sms_reliable(number, message)
-        results.append({"number": number, "success": success})
-        time.sleep(8)  # 8 second delay
-    
-    return jsonify({"results": results})
-
 @app.route('/api/schedule', methods=['POST'])
 def api_schedule():
     data = request.json
@@ -781,11 +842,35 @@ def api_schedule():
     
     return jsonify({"success": True})
 
+@app.route('/api/schedule-bulk', methods=['POST'])
+def api_schedule_bulk():
+    data = request.json
+    if data.get('key') != API_KEY:
+        return jsonify({"error": "Invalid API key"}), 403
+    
+    numbers = data.get('numbers', [])
+    message = data.get('message')
+    schedule_time = datetime.datetime.fromisoformat(data.get('scheduleTime'))
+    
+    conn = sqlite3.connect('sms_final.db')
+    c = conn.cursor()
+    
+    scheduled_count = 0
+    for number in numbers:
+        c.execute("INSERT INTO scheduled (number, message, schedule_time, status, created) VALUES (?,?,?,?,?)",
+                  (number, message, schedule_time, 'pending', datetime.datetime.now()))
+        scheduled_count += 1
+    
+    conn.commit()
+    conn.close()
+    
+    return jsonify({"success": True, "scheduled": scheduled_count})
+
 @app.route('/api/scheduled')
 def get_scheduled():
     conn = sqlite3.connect('sms_final.db')
     c = conn.cursor()
-    c.execute("SELECT id, number, message, schedule_time, status FROM scheduled ORDER BY schedule_time ASC")
+    c.execute("SELECT id, number, message, schedule_time, status FROM scheduled WHERE status = 'pending' ORDER BY schedule_time ASC")
     scheduled = [{"id": row[0], "number": row[1], "message": row[2], "schedule_time": row[3], "status": row[4]} for row in c.fetchall()]
     conn.close()
     return jsonify({"scheduled": scheduled})
@@ -894,24 +979,26 @@ def send_to_group():
         success, _ = send_sms_reliable(contact[0], data.get('message'))
         if success:
             success_count += 1
-        time.sleep(8)  # 8 second delay
+        time.sleep(8)
     
     return jsonify({"success": True, "message": f"Sent to {success_count}/{len(contacts)} contacts"})
 
 if __name__ == '__main__':
     print("="*60)
-    print("🚀 SMS FINAL PRO - 100% WORKING")
+    print("🚀 SMS FINAL PRO - COMPLETE WITH BULK SCHEDULE")
     print("="*60)
     print(f"📱 Local URL: http://localhost:8080")
     print(f"🔑 API Key: {API_KEY}")
     print(f"👤 Admin: {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
     print("="*60)
-    print("✨ FEATURES FIXED:")
+    print("✨ ALL FEATURES:")
     print("  • ✅ Auto-retry on failure (3 attempts)")
     print("  • ✅ 8-second delay between messages")
-    print("  • ✅ Scheduled messages with background worker")
+    print("  • ✅ Schedule Single SMS")
+    print("  • ✅ Schedule Bulk SMS (NEW!)")
     print("  • ✅ Bulk send with real progress")
-    print("  • ✅ Delivery verification")
     print("  • ✅ Stop/Cancel bulk operation")
+    print("  • ✅ Contact & Group management")
+    print("  • ✅ Message history")
     print("="*60)
     app.run(host='0.0.0.0', port=8080, debug=False, threaded=True)
