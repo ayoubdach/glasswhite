@@ -1,8 +1,7 @@
 from flask import Flask, request, jsonify, render_template_string, session, redirect, url_for
 from flask_cors import CORS
-import subprocess, sqlite3, datetime, secrets, time, hashlib
+import subprocess, sqlite3, datetime, secrets, hashlib, random, string
 import re
-from functools import wraps
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
@@ -13,7 +12,7 @@ API_KEY = "GlasswhiteUltimate2026"
 
 # Database setup
 def init_db():
-    conn = sqlite3.connect('sms_multi_user.db')
+    conn = sqlite3.connect('sms_simple_login.db')
     c = conn.cursor()
     
     # Messages table
@@ -30,28 +29,25 @@ def init_db():
                   name TEXT, number TEXT, group_name TEXT, 
                   created DATETIME)''')
     
-    # Templates table
-    c.execute('''CREATE TABLE IF NOT EXISTS templates
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  username TEXT,
-                  name TEXT, content TEXT, created DATETIME)''')
-    
-    # Users table - stores password HASHES (not plain text)
+    # Users table with generated password
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   username TEXT UNIQUE,
                   password_hash TEXT,
                   created DATETIME,
-                  last_login DATETIME,
-                  is_admin INTEGER DEFAULT 0)''')
+                  last_login DATETIME)''')
     
-    # Insert default admin if not exists
-    c.execute("SELECT * FROM users WHERE username = 'admin'")
-    if not c.fetchone():
-        # Default admin password: admin123 (will be hashed)
-        default_hash = hashlib.sha256("admin123".encode()).hexdigest()
-        c.execute("INSERT INTO users (username, password_hash, created, is_admin) VALUES (?,?,?,?)",
-                  ('admin', default_hash, datetime.datetime.now(), 1))
+    # Create default users if not exists
+    default_users = ['admin', 'user1', 'user2', 'user3', 'user4', 'user5']
+    for user in default_users:
+        c.execute("SELECT * FROM users WHERE username = ?", (user,))
+        if not c.fetchone():
+            # Generate random password for new users
+            generated_password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+            password_hash = hashlib.sha256(generated_password.encode()).hexdigest()
+            c.execute("INSERT INTO users (username, password_hash, created) VALUES (?,?,?)",
+                      (user, password_hash, datetime.datetime.now()))
+            print(f"📝 {user} generated password: {generated_password}")
     
     conn.commit()
     conn.close()
@@ -89,37 +85,13 @@ def send_sms_reliable(number, message, retry_count=3):
     
     return False, "Unknown error"
 
-# Login required decorator
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'username' not in session:
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated_function
-
-# Admin required decorator
-def admin_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'username' not in session:
-            return redirect(url_for('login'))
-        conn = sqlite3.connect('sms_multi_user.db')
-        c = conn.cursor()
-        c.execute("SELECT is_admin FROM users WHERE username = ?", (session['username'],))
-        result = c.fetchone()
-        conn.close()
-        if not result or not result[0]:
-            return "Access denied. Admin only.", 403
-        return f(*args, **kwargs)
-    return decorated_function
-
 # HTML Templates
-LOGIN_SELECTION_PAGE = '''
+HOME_PAGE = '''
 <!DOCTYPE html>
 <html>
 <head>
     <title>SMS Gateway - Choose User</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -173,6 +145,14 @@ LOGIN_SELECTION_PAGE = '''
             color: #999;
             font-size: 12px;
         }
+        .info {
+            background: #d4edda;
+            color: #155724;
+            padding: 10px;
+            border-radius: 10px;
+            margin-top: 20px;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
@@ -190,26 +170,151 @@ LOGIN_SELECTION_PAGE = '''
                 <button class="user-btn" onclick="selectUser('user5')">👤 User 5</button>
             </div>
             
+            <div class="info">
+                💡 Each user has a generated password. Click your name to see it.
+            </div>
+            
             <div class="footer">
-                Each user sets their own password on first login
+                Secure SMS Gateway
             </div>
         </div>
     </div>
     
     <script>
         function selectUser(username) {
-            window.location.href = '/login/' + username;
+            window.location.href = '/show-password/' + username;
         }
     </script>
 </body>
 </html>
 '''
 
-SETUP_PASSWORD_PAGE = '''
+SHOW_PASSWORD_PAGE = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Setup Password - {{ username }}</title>
+    <title>Your Password - {{ username }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .card {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            width: 100%;
+            max-width: 450px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+        h2 { color: #333; margin-bottom: 10px; }
+        .subtitle { color: #666; margin-bottom: 30px; }
+        .password-box {
+            background: #f0f0f0;
+            padding: 20px;
+            border-radius: 15px;
+            margin: 20px 0;
+            border: 2px dashed #667eea;
+        }
+        .password {
+            font-size: 28px;
+            font-weight: bold;
+            font-family: monospace;
+            letter-spacing: 2px;
+            color: #667eea;
+            word-break: break-all;
+        }
+        .copy-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px;
+        }
+        .copy-btn:hover {
+            transform: scale(1.02);
+        }
+        .login-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px;
+        }
+        .warning {
+            background: #fff3cd;
+            color: #856404;
+            padding: 10px;
+            border-radius: 10px;
+            margin: 15px 0;
+            font-size: 12px;
+        }
+        .back-link {
+            margin-top: 20px;
+        }
+        .back-link a {
+            color: #667eea;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>🔐 Your Password</h2>
+        <p class="subtitle">Account: <strong>{{ username }}</strong></p>
+        
+        <div class="password-box">
+            <div class="password" id="password">{{ password }}</div>
+        </div>
+        
+        <button class="copy-btn" onclick="copyPassword()">📋 Copy Password</button>
+        <button class="login-btn" onclick="goToLogin()">🔓 Go to Login</button>
+        
+        <div class="warning">
+            ⚠️ Save this password! You will need it to login.<br>
+            You can copy it now and save it somewhere safe.
+        </div>
+        
+        <div class="back-link">
+            <a href="/">← Back to user selection</a>
+        </div>
+    </div>
+    
+    <script>
+        function copyPassword() {
+            const password = document.getElementById('password').innerText;
+            navigator.clipboard.writeText(password);
+            alert('✅ Password copied! Now click "Go to Login"');
+        }
+        
+        function goToLogin() {
+            window.location.href = '/login/{{ username }}';
+        }
+    </script>
+</body>
+</html>
+'''
+
+LOGIN_PAGE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login - {{ username }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -228,6 +333,7 @@ SETUP_PASSWORD_PAGE = '''
             width: 100%;
             max-width: 400px;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
         }
         h2 { color: #333; margin-bottom: 10px; }
         .subtitle { color: #666; margin-bottom: 30px; }
@@ -238,6 +344,9 @@ SETUP_PASSWORD_PAGE = '''
             border: 2px solid #e0e0e0;
             border-radius: 10px;
             font-size: 16px;
+            text-align: center;
+            font-family: monospace;
+            letter-spacing: 2px;
         }
         input:focus {
             outline: none;
@@ -254,116 +363,49 @@ SETUP_PASSWORD_PAGE = '''
             cursor: pointer;
             margin-top: 10px;
         }
+        button:hover {
+            transform: translateY(-2px);
+        }
         .error {
             background: #f8d7da;
             color: #721c24;
             padding: 10px;
             border-radius: 10px;
-            margin-top: 10px;
-        }
-        .info {
-            background: #d4edda;
-            color: #155724;
-            padding: 10px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-        }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>🔐 Create Password</h2>
-        <p class="subtitle">Welcome {{ username }}! Set your password</p>
-        
-        {% if error %}
-        <div class="error">{{ error }}</div>
-        {% endif %}
-        
-        <form method="POST">
-            <input type="password" name="password" placeholder="Enter password" required>
-            <input type="password" name="confirm_password" placeholder="Confirm password" required>
-            <button type="submit">Create Account</button>
-        </form>
-    </div>
-</body>
-</html>
-'''
-
-LOGIN_PASSWORD_PAGE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Login - {{ username }}</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-        }
-        .card {
-            background: white;
-            border-radius: 20px;
-            padding: 40px;
-            width: 100%;
-            max-width: 400px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        h2 { color: #333; margin-bottom: 10px; }
-        .subtitle { color: #666; margin-bottom: 30px; }
-        input {
-            width: 100%;
-            padding: 15px;
             margin: 10px 0;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            font-size: 16px;
-        }
-        button {
-            width: 100%;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 15px;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            cursor: pointer;
-            margin-top: 10px;
-        }
-        .error {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 10px;
-            border-radius: 10px;
-            margin-top: 10px;
         }
         .back-link {
-            text-align: center;
             margin-top: 20px;
         }
         .back-link a {
             color: #667eea;
             text-decoration: none;
         }
+        .forgot {
+            margin-top: 15px;
+            font-size: 12px;
+        }
+        .forgot a {
+            color: #999;
+        }
     </style>
 </head>
 <body>
     <div class="card">
         <h2>🔐 Login</h2>
-        <p class="subtitle">Welcome back {{ username }}!</p>
+        <p class="subtitle">Account: <strong>{{ username }}</strong></p>
         
         {% if error %}
         <div class="error">{{ error }}</div>
         {% endif %}
         
         <form method="POST">
-            <input type="password" name="password" placeholder="Enter your password" required>
+            <input type="password" name="password" placeholder="Enter your password" required autocomplete="off">
             <button type="submit">Login</button>
         </form>
+        
+        <div class="forgot">
+            <a href="/show-password/{{ username }}">Forgot password? Show it again</a>
+        </div>
         
         <div class="back-link">
             <a href="/">← Choose different user</a>
@@ -373,8 +415,7 @@ LOGIN_PASSWORD_PAGE = '''
 </html>
 '''
 
-# Main Dashboard (for logged in users)
-DASHBOARD_HTML = '''
+DASHBOARD_PAGE = '''
 <!DOCTYPE html>
 <html>
 <head>
@@ -384,7 +425,7 @@ DASHBOARD_HTML = '''
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); font-family: 'Segoe UI', sans-serif; padding: 20px; }
-        .container-fluid { max-width: 1200px; margin: 0 auto; }
+        .container { max-width: 1000px; margin: 0 auto; }
         .card { border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); margin-bottom: 20px; border: none; }
         .card-header { background: white; border-bottom: 2px solid #f0f0f0; font-weight: bold; }
         .btn-gradient { background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; }
@@ -395,7 +436,7 @@ DASHBOARD_HTML = '''
     </style>
 </head>
 <body>
-    <div class="container-fluid">
+    <div class="container">
         <!-- Header -->
         <div class="card">
             <div class="card-body">
@@ -418,23 +459,6 @@ DASHBOARD_HTML = '''
             <div class="col-md-4"><div class="stat-card"><i class="fas fa-check-circle fa-2x"></i><div class="stat-value" id="successRate">0%</div><div>Success Rate</div></div></div>
             <div class="col-md-4"><div class="stat-card"><i class="fas fa-address-book fa-2x"></i><div class="stat-value" id="myContacts">0</div><div>My Contacts</div></div></div>
         </div>
-        
-        <!-- Admin Panel (only visible to admin) -->
-        {% if is_admin %}
-        <div class="card">
-            <div class="card-header"><i class="fas fa-crown"></i> Admin Panel - User Management</div>
-            <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table">
-                        <thead>
-                            <tr><th>Username</th><th>Created</th><th>Last Login</th><th>Messages Sent</th><th>Actions</th></tr>
-                        </thead>
-                        <tbody id="usersTable"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        {% endif %}
         
         <!-- Send SMS -->
         <div class="card">
@@ -516,6 +540,8 @@ DASHBOARD_HTML = '''
         </div>
     </div>
     
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         async function sendSMS() {
             let number = document.getElementById('number').value;
@@ -571,36 +597,6 @@ DASHBOARD_HTML = '''
             
             document.getElementById('contactsList').innerHTML = html || '<p>No contacts yet</p>';
             document.getElementById('quickContact').innerHTML = selectHtml;
-            
-            if({{ 'true' if is_admin else 'false' }}) {
-                loadUsers();
-            }
-        }
-        
-        async function loadUsers() {
-            let res = await fetch('/api/admin/users');
-            let users = await res.json();
-            let html = '';
-            for(let u of users) {
-                let statsRes = await fetch(`/api/admin/user-stats/${u.username}`);
-                let stats = await statsRes.json();
-                html += `<tr>
-                    <td>${u.username}</td>
-                    <td>${u.created || '-'}</td>
-                    <td>${u.last_login || '-'}</td>
-                    <td>${stats.message_count || 0}</td>
-                    <td><button class="btn btn-sm btn-danger" onclick="resetUser('${u.username}')">Reset Password</button></td>
-                </tr>`;
-            }
-            document.getElementById('usersTable').innerHTML = html;
-        }
-        
-        async function resetUser(username) {
-            if(confirm(`Reset password for ${username}? They will need to create a new password.`)) {
-                await fetch(`/api/admin/reset/${username}`, {method: 'POST'});
-                alert('Password reset! User will create new password on next login.');
-                loadUsers();
-            }
         }
         
         async function loadHistory() {
@@ -674,7 +670,6 @@ DASHBOARD_HTML = '''
         loadContacts();
         loadHistory();
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 '''
@@ -682,84 +677,61 @@ DASHBOARD_HTML = '''
 # Routes
 @app.route('/')
 def home():
-    return render_template_string(LOGIN_SELECTION_PAGE)
+    return HOME_PAGE
 
-@app.route('/login/<username>', methods=['GET', 'POST'])
-def login_user(username):
-    conn = sqlite3.connect('sms_multi_user.db')
+@app.route('/show-password/<username>')
+def show_password(username):
+    conn = sqlite3.connect('sms_simple_login.db')
     c = conn.cursor()
     
-    # Check if user exists
-    c.execute("SELECT * FROM users WHERE username = ?", (username,))
+    # Get or create user
+    c.execute("SELECT password_hash FROM users WHERE username = ?", (username,))
     user = c.fetchone()
     
     if not user:
-        # Create new user (no password yet)
-        c.execute("INSERT INTO users (username, created, is_admin) VALUES (?,?,?)",
-                  (username, datetime.datetime.now(), 1 if username == 'admin' else 0))
+        # Generate new password
+        generated_password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+        password_hash = hashlib.sha256(generated_password.encode()).hexdigest()
+        c.execute("INSERT INTO users (username, password_hash, created) VALUES (?,?,?)",
+                  (username, password_hash, datetime.datetime.now()))
         conn.commit()
-        conn.close()
-        return render_template_string(SETUP_PASSWORD_PAGE, username=username, error=None)
+    else:
+        # We need to show the password - but we only have hash!
+        # So we need to store password in a separate table or regenerate
+        # Let's regenerate a new password for security
+        generated_password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+        password_hash = hashlib.sha256(generated_password.encode()).hexdigest()
+        c.execute("UPDATE users SET password_hash = ? WHERE username = ?", (password_hash, username))
+        conn.commit()
     
     conn.close()
-    
-    # Check if user has a password set
-    if user[2] is None or user[2] == '':
-        return render_template_string(SETUP_PASSWORD_PAGE, username=username, error=None)
-    
+    return render_template_string(SHOW_PASSWORD_PAGE, username=username, password=generated_password)
+
+@app.route('/login/<username>', methods=['GET', 'POST'])
+def login_user(username):
     if request.method == 'POST':
         password = request.form.get('password')
         password_hash = hashlib.sha256(password.encode()).hexdigest()
         
-        if password_hash == user[2]:
+        conn = sqlite3.connect('sms_simple_login.db')
+        c = conn.cursor()
+        c.execute("SELECT password_hash FROM users WHERE username = ?", (username,))
+        user = c.fetchone()
+        conn.close()
+        
+        if user and user[0] == password_hash:
             session['username'] = username
-            
-            # Update last login
-            conn = sqlite3.connect('sms_multi_user.db')
-            c = conn.cursor()
-            c.execute("UPDATE users SET last_login = ? WHERE username = ?", (datetime.datetime.now(), username))
-            conn.commit()
-            conn.close()
-            
             return redirect(url_for('dashboard'))
         else:
-            return render_template_string(LOGIN_PASSWORD_PAGE, username=username, error="Invalid password")
+            return render_template_string(LOGIN_PAGE, username=username, error="❌ Invalid password")
     
-    return render_template_string(LOGIN_PASSWORD_PAGE, username=username, error=None)
-
-@app.route('/login/<username>', methods=['POST'])
-def setup_password(username):
-    password = request.form.get('password')
-    confirm = request.form.get('confirm_password')
-    
-    if password != confirm:
-        return render_template_string(SETUP_PASSWORD_PAGE, username=username, error="Passwords don't match")
-    
-    if len(password) < 4:
-        return render_template_string(SETUP_PASSWORD_PAGE, username=username, error="Password must be at least 4 characters")
-    
-    password_hash = hashlib.sha256(password.encode()).hexdigest()
-    
-    conn = sqlite3.connect('sms_multi_user.db')
-    c = conn.cursor()
-    c.execute("UPDATE users SET password_hash = ? WHERE username = ?", (password_hash, username))
-    conn.commit()
-    conn.close()
-    
-    session['username'] = username
-    return redirect(url_for('dashboard'))
+    return render_template_string(LOGIN_PAGE, username=username, error=None)
 
 @app.route('/dashboard')
-@login_required
 def dashboard():
-    conn = sqlite3.connect('sms_multi_user.db')
-    c = conn.cursor()
-    c.execute("SELECT is_admin FROM users WHERE username = ?", (session['username'],))
-    result = c.fetchone()
-    conn.close()
-    is_admin = result[0] == 1 if result else False
-    
-    return render_template_string(DASHBOARD_HTML, username=session['username'], is_admin=is_admin, api_key=API_KEY)
+    if 'username' not in session:
+        return redirect(url_for('home'))
+    return render_template_string(DASHBOARD_PAGE, username=session['username'], api_key=API_KEY)
 
 @app.route('/logout')
 def logout():
@@ -768,8 +740,10 @@ def logout():
 
 # API Routes
 @app.route('/api/send', methods=['POST'])
-@login_required
 def api_send():
+    if 'username' not in session:
+        return jsonify({"error": "Not logged in"}), 401
+    
     data = request.json
     if data.get('key') != API_KEY:
         return jsonify({"error": "Invalid API key"}), 403
@@ -782,7 +756,7 @@ def api_send():
     
     success, result = send_sms_reliable(number, message)
     
-    conn = sqlite3.connect('sms_multi_user.db')
+    conn = sqlite3.connect('sms_simple_login.db')
     c = conn.cursor()
     c.execute("INSERT INTO messages (username, number, message, status, timestamp, sender_ip) VALUES (?,?,?,?,?,?)",
               (session['username'], number, message, 'Sent' if success else 'Failed', datetime.datetime.now(), request.remote_addr))
@@ -792,9 +766,11 @@ def api_send():
     return jsonify({"success": success, "message": result})
 
 @app.route('/api/my-stats')
-@login_required
 def my_stats():
-    conn = sqlite3.connect('sms_multi_user.db')
+    if 'username' not in session:
+        return jsonify({}), 401
+    
+    conn = sqlite3.connect('sms_simple_login.db')
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM messages WHERE username = ?", (session['username'],))
     total = c.fetchone()[0]
@@ -808,14 +784,16 @@ def my_stats():
     return jsonify({"total": total, "success_rate": success_rate, "contacts": contacts})
 
 @app.route('/api/contacts', methods=['GET', 'POST'])
-@login_required
 def manage_contacts():
-    conn = sqlite3.connect('sms_multi_user.db')
+    if 'username' not in session:
+        return jsonify([]), 401
+    
+    conn = sqlite3.connect('sms_simple_login.db')
     c = conn.cursor()
     
     if request.method == 'POST':
         data = request.json
-        c.execute("INSERT OR REPLACE INTO contacts (username, name, number, group_name, created) VALUES (?,?,?,?,?)",
+        c.execute("INSERT INTO contacts (username, name, number, group_name, created) VALUES (?,?,?,?,?)",
                   (session['username'], data['name'], data['number'], data.get('group'), datetime.datetime.now()))
         conn.commit()
         conn.close()
@@ -827,60 +805,31 @@ def manage_contacts():
     return jsonify(contacts)
 
 @app.route('/api/history')
-@login_required
 def get_history():
-    conn = sqlite3.connect('sms_multi_user.db')
+    if 'username' not in session:
+        return jsonify({"history": []}), 401
+    
+    conn = sqlite3.connect('sms_simple_login.db')
     c = conn.cursor()
     c.execute("SELECT timestamp, number, message, status FROM messages WHERE username = ? ORDER BY timestamp DESC LIMIT 50", (session['username'],))
     history = [{"timestamp": row[0], "number": row[1], "message": row[2], "status": row[3]} for row in c.fetchall()]
     conn.close()
     return jsonify({"history": history})
 
-# Admin Routes
-@app.route('/api/admin/users')
-@admin_required
-def admin_users():
-    conn = sqlite3.connect('sms_multi_user.db')
-    c = conn.cursor()
-    c.execute("SELECT username, created, last_login, is_admin FROM users ORDER BY username")
-    users = [{"username": row[0], "created": row[1], "last_login": row[2], "is_admin": row[3]} for row in c.fetchall()]
-    conn.close()
-    return jsonify(users)
-
-@app.route('/api/admin/user-stats/<username>')
-@admin_required
-def admin_user_stats(username):
-    conn = sqlite3.connect('sms_multi_user.db')
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM messages WHERE username = ?", (username,))
-    message_count = c.fetchone()[0]
-    conn.close()
-    return jsonify({"message_count": message_count})
-
-@app.route('/api/admin/reset/<username>', methods=['POST'])
-@admin_required
-def admin_reset_user(username):
-    conn = sqlite3.connect('sms_multi_user.db')
-    c = conn.cursor()
-    c.execute("UPDATE users SET password_hash = NULL WHERE username = ?", (username,))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True})
-
 if __name__ == '__main__':
     print("="*60)
-    print("🔐 SMS GATEWAY - MULTI USER SYSTEM")
+    print("🔐 SMS GATEWAY - Simple Login System")
     print("="*60)
     print(f"📱 Local URL: http://localhost:8080")
     print("="*60)
-    print("👥 USERS:")
-    print("   • admin (default password: admin123)")
-    print("   • user1, user2, user3, user4, user5 (create their own password)")
+    print("👥 HOW IT WORKS:")
+    print("   1. Click on your username (admin, user1-5)")
+    print("   2. Copy the generated password")
+    print("   3. Click 'Go to Login'")
+    print("   4. Paste the password and login")
     print("="*60)
-    print("💡 HOW IT WORKS:")
-    print("   1. User clicks their name")
-    print("   2. First time: creates their own password")
-    print("   3. Afterwards: logs in with that password")
-    print("   4. Admin can reset any user's password")
+    print("💡 Passwords are generated and shown only ONCE per view")
+    print("   If you forgot, click 'Show it again' on login page")
     print("="*60)
     app.run(host='0.0.0.0', port=8080, debug=False)
+ 
